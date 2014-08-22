@@ -1,0 +1,45 @@
+{
+   "abstract" : "Email checking by smtp with Mojo enviroment.",
+   "author" : [
+      "Anatoly Y. <snelius@cpan.org>"
+   ],
+   "dynamic_config" : 1,
+   "generated_by" : "ExtUtils::MakeMaker version 6.66, CPAN::Meta::Converter version 2.133380",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Mojo-Email-Checker-SMTP",
+   "no_index" : {
+      "directory" : [
+         "t",
+         "inc"
+      ]
+   },
+   "prereqs" : {
+      "build" : {
+         "requires" : {}
+      },
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "6.52"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "Mojolicious" : "5",
+            "Net::DNS" : "0.66"
+         }
+      }
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "repository" : {
+         "url" : "https://github.com/Snelius30/Mojo-Email-Checker-SMTP"
+      }
+   },
+   "version" : "0.01"
+}
