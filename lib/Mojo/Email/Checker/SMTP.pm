@@ -1,3 +1,58 @@
+package Mojo::Email::Checker::SMTP::Cache;
+
+use strict;
+use Mojo::IOLoop;
+use Mojo::Util qw/steady_time/;
+use Scalar::Util qw/weaken/;
+
+sub new {
+	my ($class, %opts) = @_;
+	my $self = { cache => {}, cache_index => {}, timeout => $opts{timeout} };
+
+	my $this = $self;
+	weaken $this;
+
+	$self->{timer_id} = Mojo::IOLoop->recurring($this->{timeout} => sub {
+							my $time = steady_time();
+							for my $type (keys %{$this->{cache_index}}) {
+								my $i = 0;
+								for my $domain (@{$this->{cache_index}{$type}}) {
+									if (($time - $this->{cache}{$type}{$domain}{time}) > $this->{timeout}) {
+										delete $this->{cache}{$type}{$domain};
+									} else {
+										last;
+									}
+									++$i;
+								}
+								splice(@{$this->{cache_index}{$type}}, 0, $i);
+							}
+						});
+
+	bless $self, $class;
+}
+
+sub add {
+	my ($self, $domain, $type, $value, $error) = @_;
+	unless (exists($self->{cache}{$type}{$domain})) {
+		$self->{cache}{$type}{$domain}{values} = $value; #ref to array
+		$self->{cache}{$type}{$domain}{time}   = steady_time();
+		$self->{cache}{$type}{$domain}{error}  = $error;
+		push @{$self->{cache_index}{$type}}, $domain;
+	}
+}
+
+sub get {
+	my ($self, $domain, $type) = @_;
+
+	return ($self->{cache}{$type}{$domain} ? ($self->{cache}{$type}{$domain}{values}, $self->{cache}{$type}{$domain}{error}) : ());
+}
+
+sub DESTROY {
+	my $self = shift;
+	Mojo::IOLoop->remove($self->{timer_id}) if ($self->{timer_id});
+}
+
+
 package Mojo::Email::Checker::SMTP;
 
 use strict;
@@ -6,7 +61,7 @@ use Mojo::IOLoop::Delay;
 use Mojo::IOLoop::Client;
 use Mojo::IOLoop::Stream;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 use constant CRLF => "\015\012";
 
 sub new {
@@ -15,13 +70,21 @@ sub new {
 			resolver	=> Net::DNS::Resolver->new,
 			reactor		=> Mojo::IOLoop->singleton->reactor,
 			timeout		=> ($opts{timeout} ? $opts{timeout} : 15),
-			helo		=> ($opts{helo} ? $opts{helo} : 'ya.ru')
+			helo		=> ($opts{helo} ? $opts{helo} : 'ya.ru'),
+			cache		=> ($opts{cache} ? Mojo::Email::Checker::SMTP::Cache->new(timeout => $opts{cache}) : 0)
 		  }, $class;
 }
 
 sub _nslookup {
 	my ($self, $domain, $type, $cb) = @_;
 	my @result;
+
+	if ($self->{cache}) {
+		if (my ($result, $error) = $self->{cache}->get($domain, $type)) {
+			return $cb->($result, $error);
+		}
+	}
+
 	my $sock	 = $self->{resolver}->bgsend($domain, $type);
 	my $timer_id = $self->{reactor}->timer($self->{timeout} => sub {
 		$self->{reactor}->remove($sock);
@@ -35,12 +98,24 @@ sub _nslookup {
 			return $cb->(undef, "[ERROR] DNS resolver error: " . $self->{resolver}->errorstring); 
 		}
 		if ($type eq 'MX') {
-			push @result, $_->exchange for ($packet->answer);
+			for my $rec ($packet->answer) {
+				if ($rec->type eq $type) {
+					push @result, $rec->exchange;
+				}
+			}
 			$result[0] = $domain unless (@result);
 		} elsif ($type eq 'A') {
-			push @result, $_->address for ($packet->answer);
-			return $cb->(undef, "[ERROR] Can't resolve $domain") unless (@result);
+			for my $rec ($packet->answer) {
+				if ($rec->type eq $type) {
+					push @result, $rec->address;
+				}
+			}
+			unless (@result) {
+				$self->{cache}->add($domain, $type, undef, "[ERROR] Can't resolve $domain") if ($self->{cache});
+				return $cb->(undef, "[ERROR] Can't resolve $domain");
+			}
 		}
+		$self->{cache}->add($domain, $type, \@result) if ($self->{cache});
 		$cb->(\@result);
 	});
 	$self->{reactor}->watch($sock, 1, 0);
@@ -48,10 +123,11 @@ sub _nslookup {
 
 
 sub _connect {
-	my ($self, $domains, $cb) = @_;
+	my ($self, $target, $cb) = @_;
 
-	my $addr   = shift @$domains if (@$domains);
-	my $client = Mojo::IOLoop::Client->new();
+	my $domains = [@{$target}];
+	my $addr    = shift @$domains if (@$domains);
+	my $client  = Mojo::IOLoop::Client->new();
 
 	$self->_nslookup($addr, 'A', sub {
 		my ($ips, $err) = @_;
@@ -86,29 +162,41 @@ sub _connect {
 	});
 }
 
+sub _unsubscribe {
+	my ($self, $stream) = @_;
+	
+	$stream->unsubscribe('error');
+	$stream->unsubscribe('timeout');
+	$stream->unsubscribe('read');
+	$stream->unsubscribe('close');
+}
+
 sub _readhooks {
 	my ($self, $stream, $cb) = @_;
-
+	
 	my $buffer;
 	$stream->timeout($self->{timeout});
 	$stream->on(read => sub {
 		my $bytes = pop;
 		$buffer  .= $bytes;
+		
 		if ($bytes =~ /\n$/) {
-			$stream->unsubscribe('error');
-			$stream->unsubscribe('timeout');
-			$stream->unsubscribe('read');
+			$self->_unsubscribe($stream);
 			$cb->($stream, $buffer);
 		}
 	});
 	$stream->on(timeout => sub {
-		$stream->close;
+		$self->_unsubscribe($stream);
 		$cb->(undef, undef, '[ERROR] Timeout');
 	});
 	$stream->on(error => sub {
 		my $err = pop;
-		$stream->close;
+		$self->_unsubscribe($stream);
 		$cb->(undef, undef, "[ERROR] $err");
+	});
+	$stream->on(close => sub {
+		$self->_unsubscribe($stream);
+		$cb->(undef, undef, "[ERROR] socket closed unexpectedly by remote side");
 	});
 
 	$stream->start;
@@ -119,7 +207,7 @@ sub _check_errors {
 	if ($err) {
 		die $err;
 	} elsif ($buffer && $buffer =~ /^5/) {
-		die ($rcpt ? '' : 'Reject before RCPT ') . $buffer;
+		die $rcpt ? $buffer : 'Reject before RCPT ' . $buffer;
 	}
 }
 
@@ -248,6 +336,11 @@ Timeout (seconds) for all I/O operations like to connect, wait for server respon
 =item helo
 
 HELO value for smtp session ("ya.ru" :) is default). Use your own domain name for this value.
+
+=item cache
+
+Enable caching for nslookup operation. In value, cache records timeout (in seconds). For example (cache => 3600) for one hour.
+Cache disabled if 0 value or undefined.
 
 =back
 

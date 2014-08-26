@@ -21,4 +21,4 @@ requires:
   Net::DNS: 0.66
 resources:
   repository: https://github.com/Snelius30/Mojo-Email-Checker-SMTP
-version: 0.01
+version: 0.02
