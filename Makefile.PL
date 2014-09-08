@@ -9,6 +9,7 @@ WriteMakefile(
 	PREREQ_PM         => { 
 		'Mojolicious' => 5, # Delay->catch()
 		'Net::DNS'    => 0.66, # Fix for bgsend
+		'URI'         => 1.52,
 	},
 	BUILD_REQUIRES    => {
 		#'Test::More' => 0.88

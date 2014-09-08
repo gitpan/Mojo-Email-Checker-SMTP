@@ -1,5 +1,5 @@
 ---
-abstract: 'Email checking by smtp with Mojo enviroment.'
+abstract: 'Email checking by smtp with Mojo enviroment. (IDN supported)'
 author:
   - 'Anatoly Y. <snelius@cpan.org>'
 build_requires: {}
@@ -19,6 +19,7 @@ no_index:
 requires:
   Mojolicious: 5
   Net::DNS: 0.66
+  URI: 1.52
 resources:
   repository: https://github.com/Snelius30/Mojo-Email-Checker-SMTP
-version: 0.02
+version: 0.03

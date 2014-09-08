@@ -4,6 +4,7 @@ use strict;
 use Mojo::IOLoop;
 use Mojo::Util qw/steady_time/;
 use Scalar::Util qw/weaken/;
+use URI;
 
 sub new {
 	my ($class, %opts) = @_;
@@ -61,7 +62,7 @@ use Mojo::IOLoop::Delay;
 use Mojo::IOLoop::Client;
 use Mojo::IOLoop::Stream;
 
-our $VERSION = "0.02";
+our $VERSION = "0.03";
 use constant CRLF => "\015\012";
 
 sub new {
@@ -211,6 +212,13 @@ sub _check_errors {
 	}
 }
 
+sub _puny_encode_email {
+	my ($self, $email) 	= @_;
+	my ($user, $domain) = $email =~ m|(.+?)@(.+?)$|;
+
+	return URI->new("http://$user")->host . '@' . URI->new("http://$domain")->host;
+}
+
 sub check {
 	my ($self, $email, $cb) = @_;
 	my ($domain) = $email =~  m|@(.+?)$|;
@@ -219,6 +227,8 @@ sub check {
 		$cb->(undef, "[ERROR] Bad email address: $email");
 		return; 
 	}
+	
+	$domain = URI->new("http://$domain")->host;
 
 	Mojo::IOLoop::Delay->new->steps(
 		sub {
@@ -251,7 +261,8 @@ sub check {
 			my ($delay, $stream, $buf, $err) = @_;
 			$self->_check_errors($err, $buf);
 			$self->_readhooks($stream, $delay->begin(0));
-			$stream->write("RCPT TO: <$email>" . CRLF);
+			my $idn_email = $self->_puny_encode_email($email);
+			$stream->write("RCPT TO: <$idn_email>" . CRLF);
 		},
 		sub {
 			my ($delay, $stream, $buf, $err) = @_;
@@ -282,7 +293,7 @@ __END__
 
 =head1 NAME
 
-Mojo::Email::Checker::SMTP - Email checking by smtp with Mojo enviroment.
+Mojo::Email::Checker::SMTP - Email checking by smtp with Mojo enviroment. (IDN supported)
 
 =head1 SYNOPSIS
 
